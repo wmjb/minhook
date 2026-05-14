@@ -1,4 +1,4 @@
-#  MinHook - The Minimalistic API Hooking Library for x64/x86
+#  MinHook - The Minimalistic API Hooking Library for x64/x86/ARM32
 #  Copyright (C) 2009-2017 Tsuda Kageyu.
 #  All rights reserved.
 #
@@ -47,10 +47,18 @@ set(SOURCES_MINHOOK
   "src/trampoline.c"
 )
 
+#
+# Select correct HDE backend
+#
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-  set(SOURCES_HDE "src/hde/hde64.c")
+    # x64
+    set(SOURCES_HDE "src/hde/hde64.c")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+    # ARM32 (Windows RT / WoA 15035)
+    set(SOURCES_HDE "src/hde/hdearm32.c")
 else()
-  set(SOURCES_HDE "src/hde/hde32.c")
+    # x86
+    set(SOURCES_HDE "src/hde/hde32.c")
 endif()
 
 if(BUILD_SHARED_LIBS)
