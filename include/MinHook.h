@@ -1,5 +1,5 @@
 /*
- *  MinHook - The Minimalistic API Hooking Library for x64/x86
+ *  MinHook - The Minimalistic API Hooking Library for x64/x86/ARM32
  *  Copyright (C) 2009-2017 Tsuda Kageyu.
  *  All rights reserved.
  *
@@ -28,8 +28,9 @@
 
 #pragma once
 
-#if !(defined _M_IX86) && !(defined _M_X64) && !(defined __i386__) && !(defined __x86_64__)
-    #error MinHook supports only x86 and x64 systems.
+#if !(defined _M_IX86) && !(defined _M_X64) && !(defined __i386__) && \
+    !(defined __x86_64__) && !(defined _M_ARM)
+    #error MinHook supports only x86, x64, and ARM32 systems.
 #endif
 
 #include <windows.h>
@@ -139,7 +140,8 @@ extern "C" {
     //                     with other functions.
     //                     This parameter can be NULL.
     MH_STATUS WINAPI MH_CreateHookApiEx(
-        LPCWSTR pszModule, LPCSTR pszProcName, LPVOID pDetour, LPVOID *ppOriginal, LPVOID *ppTarget);
+        LPCWSTR pszModule, LPCSTR pszProcName, LPVOID pDetour,
+        LPVOID *ppOriginal, LPVOID *ppTarget);
 
     // Removes an already created hook.
     // Parameters:
