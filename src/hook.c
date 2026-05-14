@@ -1,5 +1,5 @@
-﻿/*
- *  MinHook - The Minimalistic API Hooking Library for x64/x86
+/*
+ *  MinHook - The Minimalistic API Hooking Library for x64/x86/ARM32
  *  Copyright (C) 2009-2017 Tsuda Kageyu.
  *  All rights reserved.
  *
@@ -204,6 +204,8 @@ static VOID ProcessThreadIPs(HANDLE hThread, UINT pos, UINT action)
     CONTEXT c;
 #if defined(_M_X64) || defined(__x86_64__)
     DWORD64 *pIP = &c.Rip;
+#elif defined(_M_ARM)
+    DWORD   *pIP = &c.Pc;
 #else
     DWORD   *pIP = &c.Eip;
 #endif
@@ -393,6 +395,41 @@ static VOID Unfreeze(PFROZEN_THREADS pThreads)
 static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
 {
     PHOOK_ENTRY pHook = &g_hooks.pItems[pos];
+
+#if defined(_M_ARM)
+
+    DWORD  oldProtect;
+    LPBYTE pPatchTarget = (LPBYTE)pHook->pTarget;
+    SIZE_T patchSize    = 8; // LDR.W + literal
+
+    if (!VirtualProtect(pPatchTarget, patchSize, PAGE_EXECUTE_READWRITE, &oldProtect))
+        return MH_ERROR_MEMORY_PROTECT;
+
+    if (enable)
+    {
+        // Thumb-2 entry stub:
+        //   LDR.W  PC, [PC, #-4]   ; F8DF F004
+        //   DCD    pDetour | 1
+        ((uint16_t*)pPatchTarget)[0] = 0xF8DF;
+        ((uint16_t*)pPatchTarget)[1] = 0xF004;
+        *(uint32_t*)(pPatchTarget + 4) = (uint32_t)pHook->pDetour | 1u;
+    }
+    else
+    {
+        // Restore original 8 bytes.
+        memcpy(pPatchTarget, pHook->backup, patchSize);
+    }
+
+    VirtualProtect(pPatchTarget, patchSize, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), pPatchTarget, patchSize);
+
+    pHook->isEnabled   = enable;
+    pHook->queueEnable = enable;
+
+    return MH_OK;
+
+#else
+
     DWORD  oldProtect;
     SIZE_T patchSize    = sizeof(JMP_REL);
     LPBYTE pPatchTarget = (LPBYTE)pHook->pTarget;
@@ -436,6 +473,8 @@ static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
     pHook->queueEnable = enable;
 
     return MH_OK;
+
+#endif
 }
 
 //-------------------------------------------------------------------------
@@ -617,7 +656,9 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
                             memcpy(pHook->newIPs, ct.newIPs, ARRAYSIZE(ct.newIPs));
 
                             // Back up the target function.
-
+#if defined(_M_ARM)
+                            memcpy(pHook->backup, pTarget, 8);
+#else
                             if (ct.patchAbove)
                             {
                                 memcpy(
@@ -629,6 +670,7 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
                             {
                                 memcpy(pHook->backup, pTarget, sizeof(JMP_REL));
                             }
+#endif
 
                             if (ppOriginal != NULL)
                                 *ppOriginal = pHook->pTrampoline;
