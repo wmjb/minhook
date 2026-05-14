@@ -1,5 +1,5 @@
-﻿/*
- *  MinHook - The Minimalistic API Hooking Library for x64/x86
+/*
+ *  MinHook - The Minimalistic API Hooking Library for x64/x86/ARM32
  *  Copyright (C) 2009-2017 Tsuda Kageyu.
  *  All rights reserved.
  *
@@ -41,10 +41,16 @@
     #include "./hde/hde64.h"
     typedef hde64s HDE;
     #define HDE_DISASM(code, hs) hde64_disasm(code, hs)
-#else
+#elif defined(_M_IX86) || defined(__i386__)
     #include "./hde/hde32.h"
     typedef hde32s HDE;
     #define HDE_DISASM(code, hs) hde32_disasm(code, hs)
+#elif defined(_M_ARM)
+    #include "./hde/hdearm32.h"
+    typedef hdearm32s HDE;
+    #define HDE_DISASM(code, hs) hdearm32_disasm(code, hs)
+#else
+    #error Unsupported architecture
 #endif
 
 #include "trampoline.h"
@@ -91,7 +97,7 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
         0xFF, 0x25, 0x00000000, // FF25 00000000: JMP [RIP+6]
         0x0000000000000000ULL   // Absolute destination address
     };
-#else
+#elif defined(_M_IX86) || defined(__i386__)
     CALL_REL call = {
         0xE8,                   // E8 xxxxxxxx: CALL +5+xxxxxxxx
         0x00000000              // Relative destination address
@@ -116,6 +122,94 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
 
     ct->patchAbove = FALSE;
     ct->nIP        = 0;
+
+#if defined(_M_ARM)
+
+    /*
+     * ARM32 / Thumb-2 path.
+     *
+     * Strategy:
+     *  - Copy instructions from pTarget into pTrampoline until we have relocated
+     *    at least 8 bytes of the original prolog.
+     *  - For now, we refuse to relocate PC-relative instructions (branches etc.).
+     *  - Append a branch-back stub at the end of the trampoline:
+     *
+     *      LDR.W  PC, [PC, #-4]   ; F8DF F004
+     *      DCD    (pTarget + oldPos) | 1
+     *
+     *    This keeps us in Thumb state and returns to the original function
+     *    after the relocated prolog.
+     */
+
+    do
+    {
+        HDE       hs;
+        UINT      copySize;
+        LPVOID    pCopySrc;
+        ULONG_PTR pOldInst = (ULONG_PTR)ct->pTarget     + oldPos;
+        ULONG_PTR pNewInst = (ULONG_PTR)ct->pTrampoline + newPos;
+
+        copySize = HDE_DISASM((LPVOID)pOldInst, &hs);
+        if (hs.flags & HDEARM_F_ERROR)
+            return FALSE;
+
+        /* For the first implementation, do not relocate PC-relative instructions. */
+        if (hs.flags & HDEARM_F_PC_REL)
+            return FALSE;
+
+        pCopySrc = (LPVOID)pOldInst;
+
+        /* Trampoline function is too large. */
+        if ((newPos + copySize + 8) > TRAMPOLINE_MAX_SIZE)
+            return FALSE;
+
+        /* Trampoline function has too many instructions. */
+        if (ct->nIP >= ARRAYSIZE(ct->oldIPs))
+            return FALSE;
+
+        ct->oldIPs[ct->nIP] = oldPos;
+        ct->newIPs[ct->nIP] = newPos;
+        ct->nIP++;
+
+#ifndef ALLOW_INTRINSICS
+        memcpy((LPBYTE)ct->pTrampoline + newPos, pCopySrc, copySize);
+#else
+        __movsb((LPBYTE)ct->pTrampoline + newPos, (LPBYTE)pCopySrc, copySize);
+#endif
+
+        newPos += copySize;
+        oldPos += (UINT8)hs.len;
+
+        /* We are done once we have relocated at least 8 bytes of the original prolog. */
+        finished = (oldPos >= 8);
+
+    } while (!finished);
+
+    /*
+     * Append branch-back stub:
+     *
+     *   LDR.W  PC, [PC, #-4]        ; F8DF F004
+     *   DCD    (pTarget + oldPos) | 1
+     */
+
+    {
+        ULONG_PTR pStub      = (ULONG_PTR)ct->pTrampoline + newPos;
+        uint16_t *pHw        = (uint16_t *)pStub;
+        uint32_t *pLit       = (uint32_t *)(pStub + 4);
+        ULONG_PTR targetCont = (ULONG_PTR)ct->pTarget + oldPos;
+
+        pHw[0] = 0xF8DF;
+        pHw[1] = 0xF004;
+
+        *pLit = (uint32_t)(targetCont | 1u);
+
+        newPos += 8;
+    }
+
+    /* On ARM32 we do not use patchAbove / relay logic. */
+    return TRUE;
+
+#else  /* ! _M_ARM : original x86/x64 logic */
 
     do
     {
@@ -317,4 +411,6 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
 #endif
 
     return TRUE;
+
+#endif /* !_M_ARM */
 }
